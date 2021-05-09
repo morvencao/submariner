@@ -28,6 +28,7 @@ import (
 	"github.com/onsi/gomega/format"
 	gomegaTypes "github.com/onsi/gomega/types"
 	"github.com/pkg/errors"
+	fakeReactor "github.com/submariner-io/admiral/pkg/fake"
 	. "github.com/submariner-io/admiral/pkg/gomega"
 	"github.com/submariner-io/admiral/pkg/syncer/test"
 	"github.com/submariner-io/admiral/pkg/watcher"
@@ -37,7 +38,7 @@ import (
 	"github.com/submariner-io/submariner/pkg/cableengine/healthchecker/fake"
 	"github.com/submariner-io/submariner/pkg/cableengine/syncer"
 	fakeClientset "github.com/submariner-io/submariner/pkg/client/clientset/versioned/fake"
-	fakeClientsetv1 "github.com/submariner-io/submariner/pkg/client/clientset/versioned/typed/submariner.io/v1/fake"
+	submarinerClientsetv1 "github.com/submariner-io/submariner/pkg/client/clientset/versioned/typed/submariner.io/v1"
 	submarinerInformers "github.com/submariner-io/submariner/pkg/client/informers/externalversions"
 	"github.com/submariner-io/submariner/pkg/types"
 	"github.com/submariner-io/submariner/pkg/util"
@@ -152,6 +153,7 @@ func testGatewaySyncing() {
 func testStaleGatewayCleanup() {
 	var t *testDriver
 	var staleGateway *submarinerv1.Gateway
+	var expectedErr = errors.New("fake error")
 
 	BeforeEach(func() {
 		t = newTestDriver()
@@ -221,23 +223,23 @@ func testStaleGatewayCleanup() {
 	})
 
 	When("listing of Gateways fails", func() {
-		BeforeEach(func() {
-			t.gateways.FailOnList = errors.New("fake error")
+		JustBeforeEach(func() {
+			t.gatewayReactor.SetFailOnList(expectedErr)
 		})
 
 		It("should log the error", func() {
-			Eventually(t.handledError, 5).Should(Receive(ContainErrorSubstring(t.gateways.FailOnList)))
+			Eventually(t.handledError, 5).Should(Receive(ContainErrorSubstring(expectedErr)))
 		})
 	})
 
 	When("Gateway delete fails", func() {
 		BeforeEach(func() {
-			t.gateways.FailOnDelete = errors.New("fake error")
+			t.gatewayReactor.SetFailOnDelete(expectedErr)
 			t.expectedDeletedAfter = nil
 		})
 
 		It("should log the error", func() {
-			Eventually(t.handledError, 5).Should(Receive(ContainErrorSubstring(t.gateways.FailOnDelete)))
+			Eventually(t.handledError, 5).Should(Receive(ContainErrorSubstring(expectedErr)))
 		})
 	})
 }
@@ -262,7 +264,7 @@ func testGatewaySyncErrors() {
 
 	When("Gateway create fails", func() {
 		BeforeEach(func() {
-			t.gateways.FailOnCreate = expectedErr
+			t.gatewayReactor.SetFailOnCreate(expectedErr)
 		})
 
 		It("should log the error", func() {
@@ -272,7 +274,7 @@ func testGatewaySyncErrors() {
 
 	When("Gateway update fails", func() {
 		BeforeEach(func() {
-			t.gateways.FailOnUpdate = expectedErr
+			t.gatewayReactor.SetFailOnUpdate(expectedErr)
 		})
 
 		It("should log the error", func() {
@@ -288,7 +290,7 @@ func testGatewaySyncErrors() {
 
 	When("existing Gateway retrieval fails", func() {
 		BeforeEach(func() {
-			t.gateways.FailOnGet = expectedErr
+			t.gatewayReactor.SetFailOnGet(expectedErr)
 		})
 
 		It("should log the error", func() {
@@ -401,7 +403,9 @@ func testGatewayLatencyInfo() {
 
 type testDriver struct {
 	engine               *fakeEngine.Engine
-	gateways             *fakeClientsetv1.FailingGateways
+	client               *fakeClientset.Clientset
+	gateways             submarinerClientsetv1.GatewayInterface
+	gatewayReactor       *fakeReactor.FailingReactor
 	syncer               *syncer.GatewaySyncer
 	healthChecker        healthchecker.Interface
 	pinger               *fake.Pinger
@@ -417,9 +421,13 @@ type testDriver struct {
 }
 
 func newTestDriver() *testDriver {
+	client := fakeClientset.NewSimpleClientset()
+
 	t := &testDriver{
 		engine:             fakeEngine.New(),
-		gateways:           &fakeClientsetv1.FailingGateways{},
+		client:             client,
+		gateways:           client.SubmarinerV1().Gateways(namespace),
+		gatewayReactor:     fakeReactor.NewFailingReactorForResource(&client.Fake, "gateways"),
 		gatewayUpdated:     make(chan *submarinerv1.Gateway, 10),
 		gatewayDeleted:     make(chan *submarinerv1.Gateway, 10),
 		stopSyncer:         make(chan struct{}),
@@ -466,9 +474,6 @@ func (t *testDriver) run() {
 	dynamicClient := fakeClient.NewSimpleDynamicClient(scheme)
 	restMapper := test.GetRESTMapperFor(&submarinerv1.Endpoint{})
 
-	client := fakeClientset.NewSimpleClientset()
-	t.gateways.GatewayInterface = client.SubmarinerV1().Gateways(namespace)
-
 	t.pinger = fake.NewPinger("10.130.2.2")
 
 	t.healthChecker, _ = healthchecker.New(&healthchecker.Config{
@@ -490,7 +495,7 @@ func (t *testDriver) run() {
 
 	t.syncer = syncer.NewGatewaySyncer(t.engine, t.gateways, t.expectedGateway.Status.Version, t.healthChecker)
 
-	informerFactory := submarinerInformers.NewSharedInformerFactory(client, 0)
+	informerFactory := submarinerInformers.NewSharedInformerFactory(t.client, 0)
 	informer := informerFactory.Submariner().V1().Gateways().Informer()
 
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
