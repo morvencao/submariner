@@ -1,5 +1,7 @@
 /*
-© 2021 Red Hat, Inc. and others
+SPDX-License-Identifier: Apache-2.0
+
+Copyright Contributors to the Submariner project.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +21,12 @@ const (
 	SmGlobalnetIngressChain = "SUBMARINER-GN-INGRESS"
 	SmGlobalnetEgressChain  = "SUBMARINER-GN-EGRESS"
 	SmGlobalnetMarkChain    = "SUBMARINER-GN-MARK"
+
+	// The following chains are added as part of GN 2.0 implementation
+	SmGlobalnetEgressChainForPods            = "SM-GN-EGRESS-PODS"
+	SmGlobalnetEgressChainForHeadlessSvcPods = "SM-GN-EGRESS-HDLS-PODS"
+	SmGlobalnetEgressChainForNamespace       = "SM-GN-EGRESS-NS"
+	SmGlobalnetEgressChainForCluster         = "SM-GN-EGRESS-CLUSTER"
 
 	// IPTable chains used by RouteAgent
 	SmPostRoutingChain = "SUBMARINER-POSTROUTING"
