@@ -74,7 +74,7 @@ func (er *Registry) addCNIDriverHandler(eventHandler Handler) error {
 	return nil
 }
 
-func (er *Registry) addGenricHandler(eventHandler Handler) error {
+func (er *Registry) addGenericHandler(eventHandler Handler) error {
 	if err := eventHandler.Init(); err != nil {
 		return errors.Wrapf(err, "Event handler %q failed to initialize", eventHandler.GetName())
 	}

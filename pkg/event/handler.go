@@ -25,7 +25,6 @@ import (
 
 const AnyNetworkPlugin = ""
 
-// ServiceImportType designates the type of a ServiceImport
 type HandlerType string
 
 const (
@@ -44,7 +43,7 @@ type Handler interface {
 	// GetName returns the name of the event handler
 	GetName() string
 
-	// GetDrivers returns the kubernetes network drivers that this handler supports.
+	// GetDrivers returns the names of the drivers that this handler supports.
 	GetDrivers() []string
 
 	// Stop is called once during shutdown to let the handler perform any cleanup. The uninstall flag indicates

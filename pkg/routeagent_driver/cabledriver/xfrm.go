@@ -28,12 +28,12 @@ import (
 	"k8s.io/klog"
 )
 
-type Handler struct {
+type handler struct {
 	event.HandlerBase
 	netLink netlink.Interface
 }
 
-func NewXfrm() *Handler {
+func NewXFRMCleanupHandler() event.Handler {
 	return &Handler{netLink: netlink.New()}
 }
 

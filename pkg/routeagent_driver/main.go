@@ -82,7 +82,7 @@ func main() {
 	}
 
 	if cableDriver == "" {
-		cableDriver = "libreswan"
+		cableDriver = cable.GetDefaultCableDriver()
 	}
 
 	registry := event.NewRegistry("routeagent_driver", np, cableDriver)
