@@ -22,7 +22,6 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"fmt"
-	"net"
 	"os"
 	"strings"
 	"time"
@@ -34,7 +33,6 @@ import (
 	submarinerv1 "github.com/submariner-io/submariner/pkg/apis/submariner.io/v1"
 	"github.com/submariner-io/submariner/pkg/globalnet/controllers/ipam"
 	"github.com/submariner-io/submariner/pkg/iptables"
-	fakeIPT "github.com/submariner-io/submariner/pkg/iptables/fake"
 	"github.com/submariner-io/submariner/pkg/routeagent_driver/constants"
 	"github.com/submariner-io/submariner/pkg/util"
 	corev1 "k8s.io/api/core/v1"
@@ -43,16 +41,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
-	fakeDynClient "k8s.io/client-go/dynamic/fake"
 	mcsv1a1 "sigs.k8s.io/mcs-api/pkg/apis/v1alpha1"
 )
 
 const (
 	clusterID       = "east"
 	remoteClusterID = "west"
-	namespace       = "submariner"
 	excludedNS      = "excludedNS"
-	localCIDR       = "169.254.1.0/24"
 	remoteCIDR      = "169.254.2.0/24"
 	nodeName        = "raiders"
 	oldIP           = "169.254.1.10"
@@ -67,7 +62,7 @@ var _ = Describe("Endpoint monitoring", func() {
 		It("should update the appropriate IP table chains and start/stop monitoring resources", func() {
 			service := t.createService(newService("nginx"))
 			t.createSvcExport(service)
-			endpointName := t.createEndpoint(newEndpointSpec(clusterID, t.hostName, localCIDR))
+			endpointName := t.createEndpoint(newEndpointSpec(clusterID, t.hostName, t.globalCIDR))
 
 			t.ipt.AwaitChain("nat", constants.SmGlobalnetIngressChain)
 			t.ipt.AwaitChain("nat", constants.SmGlobalnetEgressChain)
@@ -98,9 +93,9 @@ var _ = Describe("Endpoint monitoring", func() {
 
 	When("a remote Endpoint with an overlapping CIDR is created", func() {
 		It("should not add expected IP table rule(s)", func() {
-			t.createEndpoint(newEndpointSpec(remoteClusterID, t.hostName, localCIDR))
+			t.createEndpoint(newEndpointSpec(remoteClusterID, t.hostName, t.globalCIDR))
 			time.Sleep(500 * time.Millisecond)
-			t.ipt.AwaitNoRule("nat", constants.SmGlobalnetMarkChain, ContainSubstring(localCIDR))
+			t.ipt.AwaitNoRule("nat", constants.SmGlobalnetMarkChain, ContainSubstring(t.globalCIDR))
 		})
 	})
 })
@@ -116,7 +111,7 @@ var _ = Describe("Service monitoring", func() {
 
 	When("a Service without a global IP is created", func() {
 		JustBeforeEach(func() {
-			t.createEndpoint(newEndpointSpec(clusterID, t.hostName, localCIDR))
+			t.createEndpoint(newEndpointSpec(clusterID, t.hostName, t.globalCIDR))
 		})
 
 		Context("and it was already exported", func() {
@@ -148,7 +143,7 @@ var _ = Describe("Service monitoring", func() {
 		JustBeforeEach(func() {
 			service = t.createService(service)
 			t.createSvcExport(service)
-			t.createEndpoint(newEndpointSpec(clusterID, t.hostName, localCIDR))
+			t.createEndpoint(newEndpointSpec(clusterID, t.hostName, t.globalCIDR))
 		})
 
 		When("a Service's global IP is updated", func() {
@@ -239,7 +234,7 @@ var _ = Describe("Pod monitoring", func() {
 
 	JustBeforeEach(func() {
 		pod = t.createPod(pod)
-		t.createEndpoint(newEndpointSpec(clusterID, t.hostName, localCIDR))
+		t.createEndpoint(newEndpointSpec(clusterID, t.hostName, t.globalCIDR))
 	})
 
 	When("a Pod without a global IP is created", func() {
@@ -338,7 +333,7 @@ var _ = Describe("Node monitoring", func() {
 
 	JustBeforeEach(func() {
 		node = t.createNode(node)
-		t.createEndpoint(newEndpointSpec(clusterID, t.hostName, localCIDR))
+		t.createEndpoint(newEndpointSpec(clusterID, t.hostName, t.globalCIDR))
 	})
 
 	When("a Node without a global IP is created", func() {
@@ -395,6 +390,7 @@ var _ = Describe("Node monitoring", func() {
 })
 
 type testDriver struct {
+	*testDriverBase
 	spec           *ipam.SubmarinerIPAMControllerSpecification
 	config         watcher.Config
 	endpoints      dynamic.ResourceInterface
@@ -403,23 +399,20 @@ type testDriver struct {
 	pods           dynamic.NamespaceableResourceInterface
 	nodes          dynamic.NamespaceableResourceInterface
 	gatewayMonitor *ipam.GatewayMonitor
-	dynClient      dynamic.Interface
-	ipt            *fakeIPT.IPTables
 	hostName       string
-	stopCh         chan struct{}
 }
 
 func newTestDriver() *testDriver {
 	t := &testDriver{}
 
 	BeforeEach(func() {
+		t.testDriverBase = newTestDriverBase()
+
 		t.spec = &ipam.SubmarinerIPAMControllerSpecification{
 			ClusterID:  clusterID,
 			Namespace:  namespace,
-			GlobalCIDR: []string{localCIDR},
+			GlobalCIDR: []string{t.globalCIDR},
 		}
-
-		t.ipt = fakeIPT.New()
 
 		iptables.NewFunc = func() (iptables.Interface, error) {
 			return t.ipt, nil
@@ -427,18 +420,10 @@ func newTestDriver() *testDriver {
 
 		t.ipt.AddChainsFor("nat", "KUBE-SERVICES")
 
-		scheme := runtime.NewScheme()
-		Expect(mcsv1a1.AddToScheme(scheme)).To(Succeed())
-		Expect(submarinerv1.AddToScheme(scheme)).To(Succeed())
-		Expect(corev1.AddToScheme(scheme)).To(Succeed())
-
-		t.dynClient = fakeDynClient.NewSimpleDynamicClient(scheme)
-
 		t.config = watcher.Config{
-			RestMapper: test.GetRESTMapperFor(&submarinerv1.Endpoint{}, &corev1.Service{}, &corev1.Node{}, &corev1.Pod{},
-				&mcsv1a1.ServiceExport{}),
-			Client: t.dynClient,
-			Scheme: scheme,
+			RestMapper: t.restMapper,
+			Client:     t.dynClient,
+			Scheme:     t.scheme,
 		}
 
 		t.endpoints = t.dynClient.Resource(*test.GetGroupVersionResourceFor(t.config.RestMapper, &submarinerv1.Endpoint{})).
@@ -458,9 +443,8 @@ func newTestDriver() *testDriver {
 	})
 
 	AfterEach(func() {
-		close(t.stopCh)
+		t.testDriverBase.afterEach()
 		t.gatewayMonitor.Stop()
-		iptables.NewFunc = nil
 	})
 
 	return t
@@ -473,8 +457,6 @@ func (t *testDriver) start() {
 
 	t.hostName, err = os.Hostname()
 	Expect(err).To(Succeed())
-
-	t.stopCh = make(chan struct{})
 
 	t.gatewayMonitor, err = ipam.NewGatewayMonitor(t.spec, t.config)
 
@@ -518,7 +500,7 @@ func (t *testDriver) createSvcExport(s *corev1.Service) {
 }
 
 func (t *testDriver) awaitServiceGlobalIP(name string) string {
-	return t.awaitGlobalIP(name, localCIDR, func(string) (runtime.Object, error) {
+	return t.awaitGlobalIP(name, t.globalCIDR, func(string) (runtime.Object, error) {
 		return t.services.Namespace(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	})
 }
@@ -565,7 +547,7 @@ func (t *testDriver) createPod(p *corev1.Pod) *corev1.Pod {
 }
 
 func (t *testDriver) awaitPodGlobalIP(name string) string {
-	return t.awaitGlobalIP(name, localCIDR, func(string) (runtime.Object, error) {
+	return t.awaitGlobalIP(name, t.globalCIDR, func(string) (runtime.Object, error) {
 		return t.pods.Namespace(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	})
 }
@@ -581,7 +563,7 @@ func (t *testDriver) createNode(node *corev1.Node) *corev1.Node {
 }
 
 func (t *testDriver) awaitNodeGlobalIP(name string) string {
-	return t.awaitGlobalIP(name, localCIDR, func(string) (runtime.Object, error) {
+	return t.awaitGlobalIP(name, t.globalCIDR, func(string) (runtime.Object, error) {
 		return t.nodes.Get(context.TODO(), name, metav1.GetOptions{})
 	})
 }
@@ -629,13 +611,6 @@ func newServiceExport(namespace, name string) *unstructured.Unstructured {
 	resourceServiceExport.SetAPIVersion("multicluster.x-k8s.io/v1alpha1")
 
 	return resourceServiceExport
-}
-
-func isValidIPForCIDR(cidr, ip string) bool {
-	_, ipnet, err := net.ParseCIDR(cidr)
-	Expect(err).NotTo(HaveOccurred())
-
-	return ipnet.Contains(net.ParseIP(ip))
 }
 
 func nsOrDefault(ns string) string {

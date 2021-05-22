@@ -28,6 +28,10 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
+type ResourceController interface {
+	Start(stopCh <-chan struct{}) error
+}
+
 type SubmarinerIPAMControllerSpecification struct {
 	ClusterID  string
 	ExcludeNS  []string
@@ -61,4 +65,9 @@ type GatewayMonitor struct {
 	nodeName        string
 	syncMutex       sync.Mutex
 	remoteSubnets   stringset.Interface
+}
+
+type globalEgressIPController struct {
+	pool           *IPPool
+	resourceSyncer syncer.Interface
 }
